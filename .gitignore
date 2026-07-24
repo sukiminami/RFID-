@@ -1,0 +1,16 @@
+.pio/
+.pioenvs/
+.piolog/
+.vscode/
+.build/
+*.bin
+*.elf
+*.o
+*.a
+*.map
+*.log
+.DS_Store
+Thumbs.db
+*.tmp
+*.bak
+*.swp
