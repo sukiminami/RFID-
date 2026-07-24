@@ -480,6 +480,8 @@ checksum = ~(sum(Header + FrameType + Address + FrameCode + ParamLength + Parame
 | stop_alarm | 停止报警 | 无 |
 | ota_update | OTA升级 | url(固件URL) |
 | ota_status | 查询OTA状态 | 无 |
+| ota_check | 检查GitHub更新 | repo(用户名/仓库名) |
+| ota_github | 从GitHub升级 | repo(用户名/仓库名), asset(可选，资产文件名) |
 
 **命令示例**：
 
@@ -517,6 +519,7 @@ checksum = ~(sum(Header + FrameType + Address + FrameCode + ParamLength + Parame
 | response | 命令响应 | type,frame_code,status,status_msg |
 | whitelist_query | 白名单查询结果 | type,count,items |
 | ota_status | OTA状态 | type,status,progress,current_version,message |
+| ota_check | 更新检查结果 | type,current_version,latest_version,has_update |
 
 **消息示例**：
 

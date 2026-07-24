@@ -50,6 +50,143 @@ int OtaManager::getProgress() {
 }
 
 bool OtaManager::startUpdate(const char* url) {
+    return downloadAndUpdate(url);
+}
+
+bool OtaManager::checkUpdate(const char* repo, char* latestVersion, int maxLen) {
+    if (repo == nullptr || strlen(repo) == 0) {
+        setStatus(OTA_FAILED, "无效的仓库地址");
+        return false;
+    }
+    
+    setStatus(OTA_CHECKING, "正在检查更新...");
+    
+    char apiUrl[256];
+    snprintf(apiUrl, sizeof(apiUrl), "https://api.github.com/repos/%s/releases/latest", repo);
+    
+    Serial0.printf("[OTA] 检查更新: %s\n", apiUrl);
+    
+    HTTPClient http;
+    if (!http.begin(apiUrl)) {
+        setStatus(OTA_FAILED, "HTTP连接失败");
+        http.end();
+        return false;
+    }
+    
+    http.addHeader("Accept", "application/vnd.github.v3+json");
+    
+    int httpCode = http.GET();
+    if (httpCode != HTTP_CODE_OK) {
+        setStatus(OTA_FAILED, "获取版本信息失败");
+        http.end();
+        return false;
+    }
+    
+    String payload = http.getString();
+    http.end();
+    
+    StaticJsonDocument<1024> doc;
+    DeserializationError error = deserializeJson(doc, payload);
+    if (error) {
+        setStatus(OTA_FAILED, "解析版本信息失败");
+        return false;
+    }
+    
+    const char* tagName = doc["tag_name"];
+    if (tagName != nullptr) {
+        strncpy(latestVersion, tagName, maxLen - 1);
+        Serial0.printf("[OTA] 最新版本: %s, 当前版本: %s\n", latestVersion, getCurrentVersion());
+        setStatus(OTA_IDLE, "检查完成");
+        return strcmp(latestVersion, getCurrentVersion()) != 0;
+    }
+    
+    setStatus(OTA_FAILED, "未找到版本信息");
+    return false;
+}
+
+bool OtaManager::updateFromGithub(const char* repo, const char* assetName) {
+    if (repo == nullptr || strlen(repo) == 0) {
+        setStatus(OTA_FAILED, "无效的仓库地址");
+        return false;
+    }
+    
+    char downloadUrl[512];
+    char version[32];
+    
+    if (!getLatestReleaseAsset(repo, assetName, downloadUrl, sizeof(downloadUrl), version, sizeof(version))) {
+        return false;
+    }
+    
+    Serial0.printf("[OTA] 开始升级，版本: %s, URL: %s\n", version, downloadUrl);
+    
+    return downloadAndUpdate(downloadUrl);
+}
+
+bool OtaManager::getLatestReleaseAsset(const char* repo, const char* assetName, char* downloadUrl, int maxLen, char* version, int versionMaxLen) {
+    char apiUrl[256];
+    snprintf(apiUrl, sizeof(apiUrl), "https://api.github.com/repos/%s/releases/latest", repo);
+    
+    HTTPClient http;
+    if (!http.begin(apiUrl)) {
+        setStatus(OTA_FAILED, "HTTP连接失败");
+        http.end();
+        return false;
+    }
+    
+    http.addHeader("Accept", "application/vnd.github.v3+json");
+    
+    int httpCode = http.GET();
+    if (httpCode != HTTP_CODE_OK) {
+        setStatus(OTA_FAILED, "获取版本信息失败");
+        http.end();
+        return false;
+    }
+    
+    String payload = http.getString();
+    http.end();
+    
+    StaticJsonDocument<2048> doc;
+    DeserializationError error = deserializeJson(doc, payload);
+    if (error) {
+        setStatus(OTA_FAILED, "解析版本信息失败");
+        return false;
+    }
+    
+    const char* tagName = doc["tag_name"];
+    if (tagName != nullptr) {
+        strncpy(version, tagName, versionMaxLen - 1);
+    }
+    
+    JsonArray assets = doc["assets"];
+    if (assets.isNull()) {
+        setStatus(OTA_FAILED, "未找到发布资产");
+        return false;
+    }
+    
+    for (JsonObject asset : assets) {
+        const char* name = asset["name"];
+        const char* url = asset["browser_download_url"];
+        
+        if (name != nullptr && url != nullptr) {
+            if (assetName == nullptr) {
+                strncpy(downloadUrl, url, maxLen - 1);
+                Serial0.printf("[OTA] 找到资产: %s\n", name);
+                return true;
+            }
+            
+            if (strcmp(name, assetName) == 0) {
+                strncpy(downloadUrl, url, maxLen - 1);
+                Serial0.printf("[OTA] 找到资产: %s\n", name);
+                return true;
+            }
+        }
+    }
+    
+    setStatus(OTA_FAILED, "未找到匹配的资产文件");
+    return false;
+}
+
+bool OtaManager::downloadAndUpdate(const char* url) {
     if (_updateInProgress) {
         setStatus(OTA_FAILED, "升级正在进行中");
         return false;

@@ -5,6 +5,7 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <HTTPUpdate.h>
+#include <ArduinoJson.h>
 
 typedef enum {
     OTA_IDLE,
@@ -36,6 +37,10 @@ public:
     
     bool startUpdate(const char* url);
     
+    bool updateFromGithub(const char* repo, const char* assetName = nullptr);
+    
+    bool checkUpdate(const char* repo, char* latestVersion, int maxLen);
+    
     void abortUpdate();
     
     void update();
@@ -58,6 +63,10 @@ private:
     void setStatus(OtaStatus status, const char* message);
     
     void handleUpdateResult(t_httpUpdate_return result);
+    
+    bool downloadAndUpdate(const char* url);
+    
+    bool getLatestReleaseAsset(const char* repo, const char* assetName, char* downloadUrl, int maxLen, char* version, int versionMaxLen);
 };
 
 #endif

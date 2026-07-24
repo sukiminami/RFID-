@@ -206,6 +206,83 @@ void onNetworkDataReceived(const uint8_t* data, uint16_t length, void* userData)
                     networkManager.send((uint8_t*)response, strlen(response));
                 }
                 return;
+            } else if (strcmp(cmd, "ota_check") == 0) {
+                const char* repoStart = strstr(jsonStr, "\"repo\":\"");
+                if (repoStart) {
+                    repoStart += 7;
+                    const char* repoEnd = strstr(repoStart, "\"");
+                    if (repoEnd) {
+                        char repo[128];
+                        strncpy(repo, repoStart, repoEnd - repoStart);
+                        repo[repoEnd - repoStart] = '\0';
+                        
+                        Serial0.printf("[CMD] 检查GitHub更新: %s\n", repo);
+                        
+                        char latestVersion[32];
+                        bool hasUpdate = otaManager.checkUpdate(repo, latestVersion, sizeof(latestVersion));
+                        
+                        char response[256];
+                        snprintf(response, sizeof(response), 
+                                 "{\"type\":\"ota_check\",\"current_version\":\"%s\",\"latest_version\":\"%s\",\"has_update\":%s}", 
+                                 otaManager.getCurrentVersion(),
+                                 latestVersion,
+                                 hasUpdate ? "true" : "false");
+                        
+                        Serial0.printf("[CMD] 检查结果: %s\n", response);
+                        if (networkReady) {
+                            networkManager.send((uint8_t*)response, strlen(response));
+                        }
+                    }
+                }
+                return;
+            } else if (strcmp(cmd, "ota_github") == 0) {
+                const char* repoStart = strstr(jsonStr, "\"repo\":\"");
+                if (repoStart) {
+                    repoStart += 7;
+                    const char* repoEnd = strstr(repoStart, "\"");
+                    if (repoEnd) {
+                        char repo[128];
+                        strncpy(repo, repoStart, repoEnd - repoStart);
+                        repo[repoEnd - repoStart] = '\0';
+                        
+                        const char* assetName = nullptr;
+                        const char* assetStart = strstr(jsonStr, "\"asset\":\"");
+                        if (assetStart) {
+                            assetStart += 9;
+                            const char* assetEnd = strstr(assetStart, "\"");
+                            if (assetEnd) {
+                                char asset[128];
+                                strncpy(asset, assetStart, assetEnd - assetStart);
+                                asset[assetEnd - assetStart] = '\0';
+                                assetName = asset;
+                            }
+                        }
+                        
+                        Serial0.printf("[CMD] 从GitHub升级: %s, asset: %s\n", repo, assetName ? assetName : "auto");
+                        
+                        if (networkReady) {
+                            char response[256];
+                            snprintf(response, sizeof(response), 
+                                     "{\"type\":\"ota_status\",\"status\":\"downloading\",\"progress\":0,\"current_version\":\"%s\"}", 
+                                     otaManager.getCurrentVersion());
+                            networkManager.send((uint8_t*)response, strlen(response));
+                        }
+                        
+                        otaManager.updateFromGithub(repo, assetName);
+                        
+                        if (networkReady) {
+                            char response[256];
+                            snprintf(response, sizeof(response), 
+                                     "{\"type\":\"ota_status\",\"status\":\"%s\",\"progress\":%d,\"message\":\"%s\"}", 
+                                     otaManager.getStatus() == OTA_COMPLETED ? "completed" : 
+                                     otaManager.getStatus() == OTA_FAILED ? "failed" : "error",
+                                     otaManager.getProgress(),
+                                     otaManager.getStatusMessage());
+                            networkManager.send((uint8_t*)response, strlen(response));
+                        }
+                    }
+                }
+                return;
             }
         }
     }
