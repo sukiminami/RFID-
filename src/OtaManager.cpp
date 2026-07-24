@@ -163,26 +163,54 @@ bool OtaManager::getLatestReleaseAsset(const char* repo, const char* assetName, 
         return false;
     }
     
+    const char* zipUrl = nullptr;
+    const char* binUrl = nullptr;
+    const char* fallbackUrl = nullptr;
+    
     for (JsonObject asset : assets) {
         const char* name = asset["name"];
         const char* url = asset["browser_download_url"];
         
         if (name != nullptr && url != nullptr) {
-            if (assetName == nullptr) {
-                strncpy(downloadUrl, url, maxLen - 1);
-                Serial0.printf("[OTA] 找到资产: %s\n", name);
-                return true;
-            }
-            
-            if (strcmp(name, assetName) == 0) {
-                strncpy(downloadUrl, url, maxLen - 1);
-                Serial0.printf("[OTA] 找到资产: %s\n", name);
-                return true;
+            if (assetName != nullptr) {
+                if (strcmp(name, assetName) == 0) {
+                    strncpy(downloadUrl, url, maxLen - 1);
+                    Serial0.printf("[OTA] 找到资产: %s\n", name);
+                    return true;
+                }
+            } else {
+                String nameStr = String(name);
+                if (nameStr.endsWith(".bin")) {
+                    binUrl = url;
+                } else if (nameStr.endsWith(".zip")) {
+                    zipUrl = url;
+                } else if (fallbackUrl == nullptr) {
+                    fallbackUrl = url;
+                }
             }
         }
     }
     
-    setStatus(OTA_FAILED, "未找到匹配的资产文件");
+    if (assetName != nullptr) {
+        setStatus(OTA_FAILED, "未找到匹配的资产文件");
+        return false;
+    }
+    
+    if (binUrl != nullptr) {
+        strncpy(downloadUrl, binUrl, maxLen - 1);
+        Serial0.println("[OTA] 找到.bin固件文件");
+        return true;
+    } else if (zipUrl != nullptr) {
+        strncpy(downloadUrl, zipUrl, maxLen - 1);
+        Serial0.println("[OTA] 找到.zip固件文件");
+        return true;
+    } else if (fallbackUrl != nullptr) {
+        strncpy(downloadUrl, fallbackUrl, maxLen - 1);
+        Serial0.println("[OTA] 使用备用资产文件");
+        return true;
+    }
+    
+    setStatus(OTA_FAILED, "未找到可用的资产文件");
     return false;
 }
 
