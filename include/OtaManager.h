@@ -8,6 +8,8 @@
 #include <HTTPUpdate.h>
 #include <ArduinoJson.h>
 
+class NetworkManager;
+
 typedef enum {
     OTA_IDLE,
     OTA_CHECKING,
@@ -29,6 +31,8 @@ public:
     void setProgressCallback(OtaProgressCallback callback);
     
     void setStatusCallback(OtaStatusCallback callback);
+    
+    void setNetworkManager(NetworkManager* networkManager);
     
     OtaStatus getStatus();
     
@@ -60,6 +64,7 @@ private:
     
     OtaProgressCallback _progressCallback;
     OtaStatusCallback _statusCallback;
+    NetworkManager* _networkManager;
     
     void setStatus(OtaStatus status, const char* message);
     

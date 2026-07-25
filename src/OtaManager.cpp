@@ -1,10 +1,11 @@
 #include "OtaManager.h"
+#include "NetworkManager.h"
 
 static OtaManager* s_instance = nullptr;
 
 OtaManager::OtaManager() 
     : _status(OTA_IDLE), _progress(0), _updateInProgress(false),
-      _progressCallback(nullptr), _statusCallback(nullptr) {
+      _progressCallback(nullptr), _statusCallback(nullptr), _networkManager(nullptr) {
     memset(_statusMessage, 0, sizeof(_statusMessage));
     memset(_currentVersion, 0, sizeof(_currentVersion));
 }
@@ -35,6 +36,10 @@ void OtaManager::setProgressCallback(OtaProgressCallback callback) {
 
 void OtaManager::setStatusCallback(OtaStatusCallback callback) {
     _statusCallback = callback;
+}
+
+void OtaManager::setNetworkManager(NetworkManager* networkManager) {
+    _networkManager = networkManager;
 }
 
 OtaStatus OtaManager::getStatus() {
@@ -326,35 +331,113 @@ bool OtaManager::downloadAndUpdate(const char* url) {
         
         Update.setMD5(http.header("X-MD5").c_str());
         
-        Serial0.println("[OTA] 开始写入固件...");
-        size_t written = Update.writeStream(*stream);
+        Serial0.println("[OTA] 开始下载并写入固件...");
+        
+        const size_t BUFFER_SIZE = 4096;
+        uint8_t* buffer = (uint8_t*)malloc(BUFFER_SIZE);
+        if (buffer == nullptr) {
+            Serial0.println("[OTA] 内存分配失败");
+            http.end();
+            delete secureClient;
+            secureClient = nullptr;
+            Update.abort();
+            setStatus(OTA_FAILED, "内存分配失败");
+            _updateInProgress = false;
+            return false;
+        }
+        
+        size_t totalWritten = 0;
+        int lastProgress = -1;
+        int64_t lastHeartbeat = millis();
+        int64_t lastDataTime = millis();
+        
+        while (http.connected() && (totalWritten < contentLength)) {
+            size_t available = stream->available();
+            if (available > 0) {
+                size_t toRead = min((size_t)available, min((size_t)(contentLength - totalWritten), BUFFER_SIZE));
+                size_t readBytes = stream->readBytes(buffer, toRead);
+                
+                if (readBytes > 0) {
+                    size_t written = Update.write(buffer, readBytes);
+                    totalWritten += written;
+                    lastDataTime = millis();
+                    
+                    if (contentLength > 0) {
+                        int progress = (totalWritten * 100) / contentLength;
+                        if (progress != lastProgress) {
+                            lastProgress = progress;
+                            _progress = progress;
+                            Serial0.printf("[OTA] 进度: %d%%\n", progress);
+                            
+                            if (_progressCallback != nullptr && progress % 5 == 0) {
+                                _progressCallback(progress);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            yield();
+            
+            if (_networkManager != nullptr) {
+                _networkManager->update();
+            }
+            
+            int64_t now = millis();
+            if (now - lastHeartbeat > 5000) {
+                lastHeartbeat = now;
+                Serial0.printf("[OTA] 进度: %d%%, 已下载: %d/%d\n", lastProgress, (int)totalWritten, contentLength);
+            }
+            
+            if (now - lastDataTime > 30000) {
+                Serial0.println("[OTA] 下载超时，连接挂起");
+                break;
+            }
+            
+            if (!http.connected()) {
+                Serial0.println("[OTA] HTTP连接断开");
+                break;
+            }
+        }
+        
+        free(buffer);
         
         http.end();
         delete secureClient;
         secureClient = nullptr;
         
-        if (written != contentLength) {
-            Serial0.printf("[OTA] 写入字节数: %d, 预期: %d\n", written, contentLength);
-            Serial0.printf("[OTA] Update.writeStream失败: %s\n", Update.errorString());
-            Update.end();
+        if (totalWritten != contentLength) {
+            Serial0.printf("[OTA] 写入字节数: %d, 预期: %d\n", (int)totalWritten, contentLength);
+            Serial0.printf("[OTA] 下载失败: %s\n", Update.errorString());
+            Update.abort();
             if (retry < maxRetries - 1) {
-                for (int i = 0; i < 3; i++) {
+                Serial0.printf("[OTA] %d秒后重试...\n", (retry + 1) * 5);
+                for (int i = 0; i < (retry + 1) * 5; i++) {
                     delay(1000);
                     yield();
+                    if (_networkManager != nullptr) {
+                        _networkManager->update();
+                    }
                 }
                 continue;
             }
-            setStatus(OTA_FAILED, "固件写入失败");
+            setStatus(OTA_FAILED, "固件下载失败");
             _updateInProgress = false;
             return false;
         }
         
+        Serial0.println("[OTA] 下载完成，开始验证固件...");
+        
         if (!Update.end(true)) {
             Serial0.printf("[OTA] Update.end失败: %s\n", Update.errorString());
+            Update.abort();
             if (retry < maxRetries - 1) {
                 for (int i = 0; i < 3; i++) {
                     delay(1000);
                     yield();
+                    if (_networkManager != nullptr) {
+                        _networkManager->update();
+                    }
                 }
                 continue;
             }

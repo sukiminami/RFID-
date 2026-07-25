@@ -443,6 +443,17 @@ void setup() {
     Serial0.println("[系统] 初始化OTA管理器...");
     otaManager.begin();
     otaManager.setCurrentVersion(FIRMWARE_VERSION);
+    otaManager.setNetworkManager(&networkManager);
+    otaManager.setProgressCallback([](int progress) {
+        Serial0.printf("[OTA] 进度回调: %d%%\n", progress);
+        if (networkReady) {
+            char response[128];
+            snprintf(response, sizeof(response), 
+                     "{\"type\":\"ota_status\",\"status\":\"downloading\",\"progress\":%d,\"message\":\"下载中...\"}", 
+                     progress);
+            networkManager.send((uint8_t*)response, strlen(response));
+        }
+    });
     Serial0.printf("[系统] 当前固件版本: %s\n", FIRMWARE_VERSION);
     Serial0.println("[系统] OTA管理器初始化完成");
     
