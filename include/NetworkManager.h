@@ -184,14 +184,16 @@ public:
     /**
      * @brief 设置数据接收回调函数
      * @param callback 回调函数指针
+     * @param userData 用户数据指针
      */
-    void setDataCallback(NetworkDataCallback callback);
+    void setDataCallback(NetworkDataCallback callback, void* userData = nullptr);
     
     /**
      * @brief 设置网络状态变化回调函数
      * @param callback 回调函数指针
+     * @param userData 用户数据指针
      */
-    void setStatusCallback(NetworkStatusCallback callback);
+    void setStatusCallback(NetworkStatusCallback callback, void* userData = nullptr);
 
 private:
     BluetoothNetwork* _bluetooth;   /**< 蓝牙模块实例指针 */
@@ -206,6 +208,7 @@ private:
     unsigned long _wifiFailTime;    /**< Wi-Fi 失败时间戳 */
     NetworkDataCallback _dataCallback;      /**< 数据接收回调 */
     NetworkStatusCallback _statusCallback;  /**< 状态变化回调 */
+    void* _userData;                        /**< 用户数据指针 */
     
     static const unsigned long SWITCH_COOLDOWN = 10000; /**< 网络切换冷却时间（毫秒） */
     static const unsigned long WIFI_RETRY_INTERVAL = 60000; /**< Wi-Fi 重试间隔（60秒） */

@@ -19,8 +19,8 @@ typedef enum {
     OTA_FAILED
 } OtaStatus;
 
-typedef void (*OtaProgressCallback)(int progress);
-typedef void (*OtaStatusCallback)(OtaStatus status, const char* message);
+typedef void (*OtaProgressCallback)(int progress, void* userData);
+typedef void (*OtaStatusCallback)(OtaStatus status, const char* message, void* userData);
 
 class OtaManager {
 public:
@@ -28,9 +28,9 @@ public:
     
     bool begin();
     
-    void setProgressCallback(OtaProgressCallback callback);
+    void setProgressCallback(OtaProgressCallback callback, void* userData = nullptr);
     
-    void setStatusCallback(OtaStatusCallback callback);
+    void setStatusCallback(OtaStatusCallback callback, void* userData = nullptr);
     
     void setNetworkManager(NetworkManager* networkManager);
     
@@ -65,6 +65,7 @@ private:
     OtaProgressCallback _progressCallback;
     OtaStatusCallback _statusCallback;
     NetworkManager* _networkManager;
+    void* _userData;
     
     void setStatus(OtaStatus status, const char* message);
     

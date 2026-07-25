@@ -24,6 +24,7 @@ NetworkManager::NetworkManager() {
     _wifiFailTime = 0;
     _dataCallback = nullptr;
     _statusCallback = nullptr;
+    _userData = nullptr;
     memset(&_config, 0, sizeof(_config));
 }
 
@@ -319,17 +320,21 @@ WiFiNetwork* NetworkManager::getWiFiModule() {
 /**
  * @brief 设置数据接收回调函数
  * @param callback 回调函数指针
+ * @param userData 用户数据指针
  */
-void NetworkManager::setDataCallback(NetworkDataCallback callback) {
+void NetworkManager::setDataCallback(NetworkDataCallback callback, void* userData) {
     _dataCallback = callback;
+    _userData = userData;
 }
 
 /**
  * @brief 设置网络状态变化回调函数
  * @param callback 回调函数指针
+ * @param userData 用户数据指针
  */
-void NetworkManager::setStatusCallback(NetworkStatusCallback callback) {
+void NetworkManager::setStatusCallback(NetworkStatusCallback callback, void* userData) {
     _statusCallback = callback;
+    _userData = userData;
 }
 
 /**
@@ -438,7 +443,7 @@ void NetworkManager::onNetworkStatusChanged(NetworkStatus status, NetworkType ty
     Serial0.println(message);
     
     if (_statusCallback != nullptr) {
-        _statusCallback(status, type, message, nullptr);
+        _statusCallback(status, type, message, _userData);
     }
 }
 
@@ -459,7 +464,7 @@ void NetworkManager::onNetworkDataReceived(const uint8_t* data, uint16_t length)
     }
     
     if (_dataCallback != nullptr) {
-        _dataCallback(data, length, nullptr);
+        _dataCallback(data, length, _userData);
     }
 }
 

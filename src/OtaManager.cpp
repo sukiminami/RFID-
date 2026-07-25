@@ -5,7 +5,7 @@ static OtaManager* s_instance = nullptr;
 
 OtaManager::OtaManager() 
     : _status(OTA_IDLE), _progress(0), _updateInProgress(false),
-      _progressCallback(nullptr), _statusCallback(nullptr), _networkManager(nullptr) {
+      _progressCallback(nullptr), _statusCallback(nullptr), _networkManager(nullptr), _userData(nullptr) {
     memset(_statusMessage, 0, sizeof(_statusMessage));
     memset(_currentVersion, 0, sizeof(_currentVersion));
 }
@@ -21,7 +21,7 @@ bool OtaManager::begin() {
             }
             s_instance->_progress = percent;
             if (s_instance->_progressCallback != nullptr) {
-                s_instance->_progressCallback(percent);
+                s_instance->_progressCallback(percent, s_instance->_userData);
             }
         }
     });
@@ -30,12 +30,14 @@ bool OtaManager::begin() {
     return true;
 }
 
-void OtaManager::setProgressCallback(OtaProgressCallback callback) {
+void OtaManager::setProgressCallback(OtaProgressCallback callback, void* userData) {
     _progressCallback = callback;
+    _userData = userData;
 }
 
-void OtaManager::setStatusCallback(OtaStatusCallback callback) {
+void OtaManager::setStatusCallback(OtaStatusCallback callback, void* userData) {
     _statusCallback = callback;
+    _userData = userData;
 }
 
 void OtaManager::setNetworkManager(NetworkManager* networkManager) {
@@ -370,7 +372,7 @@ bool OtaManager::downloadAndUpdate(const char* url) {
                             Serial0.printf("[OTA] 进度: %d%%\n", progress);
                             
                             if (_progressCallback != nullptr && progress % 5 == 0) {
-                                _progressCallback(progress);
+                                _progressCallback(progress, _userData);
                             }
                         }
                     }
@@ -494,7 +496,7 @@ void OtaManager::setStatus(OtaStatus status, const char* message) {
     Serial0.printf("[OTA] 状态: %d, 消息: %s\n", status, _statusMessage);
     
     if (_statusCallback != nullptr) {
-        _statusCallback(status, _statusMessage);
+        _statusCallback(status, _statusMessage, _userData);
     }
 }
 

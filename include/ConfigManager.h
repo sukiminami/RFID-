@@ -19,7 +19,7 @@ typedef struct {
     char subTopic[64];
     
     uint16_t alarmDuration;
-    uint16_t heartbeatInterval;
+    uint32_t heartbeatInterval;
     uint8_t bleEnabled;
 } SystemConfig;
 
