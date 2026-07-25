@@ -317,9 +317,9 @@ void WiFiNetwork::update() {
                 
                 bool reconnected = false;
                 if (strlen(_username) > 0) {
-                    reconnected = _mqttClient.connect(_clientId, _username, _mqttPassword);
+                    reconnected = _mqttClient.connect(_clientId, _username, _mqttPassword, nullptr, 0, false, nullptr, true);
                 } else {
-                    reconnected = _mqttClient.connect(_clientId);
+                    reconnected = _mqttClient.connect(_clientId, nullptr, nullptr, nullptr, 0, false, nullptr, true);
                 }
                 
                 if (reconnected) {
@@ -609,9 +609,9 @@ bool WiFiNetwork::connectMQTT(const char* server, uint16_t port, const char* cli
         }
         
         if (username != nullptr && strlen(username) > 0) {
-            connected = _mqttClient.connect(_clientId, _username, _mqttPassword);
+            connected = _mqttClient.connect(_clientId, _username, _mqttPassword, nullptr, 0, false, nullptr, true);
         } else {
-            connected = _mqttClient.connect(_clientId);
+            connected = _mqttClient.connect(_clientId, nullptr, nullptr, nullptr, 0, false, nullptr, true);
         }
         
         if (connected) {

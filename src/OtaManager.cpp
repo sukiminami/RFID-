@@ -85,7 +85,7 @@ bool OtaManager::checkUpdate(const char* repo, char* latestVersion, int maxLen) 
     String payload = http.getString();
     http.end();
     
-    StaticJsonDocument<1024> doc;
+    DynamicJsonDocument doc(1024);
     DeserializationError error = deserializeJson(doc, payload);
     if (error) {
         setStatus(OTA_FAILED, "解析版本信息失败");
@@ -136,18 +136,25 @@ bool OtaManager::getLatestReleaseAsset(const char* repo, const char* assetName, 
     http.addHeader("Accept", "application/vnd.github.v3+json");
     
     int httpCode = http.GET();
+    Serial0.printf("[OTA] HTTP状态码: %d\n", httpCode);
     if (httpCode != HTTP_CODE_OK) {
-        setStatus(OTA_FAILED, "获取版本信息失败");
+        String errorMsg = http.getString();
         http.end();
+        Serial0.printf("[OTA] HTTP错误响应: %s\n", errorMsg.c_str());
+        setStatus(OTA_FAILED, "获取版本信息失败");
         return false;
     }
     
     String payload = http.getString();
     http.end();
     
-    StaticJsonDocument<2048> doc;
+    Serial0.printf("[OTA] 响应长度: %d\n", payload.length());
+    Serial0.printf("[OTA] 响应内容(前200字符): %s\n", payload.substring(0, min((int)payload.length(), 200)).c_str());
+    
+    DynamicJsonDocument doc(4096);
     DeserializationError error = deserializeJson(doc, payload);
     if (error) {
+        Serial0.printf("[OTA] JSON解析错误: %s\n", error.c_str());
         setStatus(OTA_FAILED, "解析版本信息失败");
         return false;
     }
@@ -232,12 +239,138 @@ bool OtaManager::downloadAndUpdate(const char* url) {
     
     Serial0.printf("[OTA] 开始升级，URL: %s\n", url);
     
-    WiFiClient client;
-    t_httpUpdate_return result = httpUpdate.update(client, String(url), String(getCurrentVersion()));
+    const int maxRetries = 3;
+    for (int retry = 0; retry < maxRetries; retry++) {
+        Serial0.printf("[OTA] 下载尝试: %d/%d\n", retry + 1, maxRetries);
+        Serial0.printf("[OTA] 可用内存: %d 字节\n", ESP.getFreeHeap());
+        
+        String currentUrl = url;
+        HTTPClient http;
+        WiFiClientSecure* secureClient = nullptr;
+        int httpCode = 0;
+        
+        for (int redirectCount = 0; redirectCount < 5; redirectCount++) {
+            secureClient = new WiFiClientSecure();
+            secureClient->setInsecure();
+            
+            Serial0.printf("[OTA] HTTP连接前内存: %d 字节\n", ESP.getFreeHeap());
+            
+            http.begin(*secureClient, currentUrl);
+            http.setConnectTimeout(15000);
+            http.setTimeout(30000);
+            const char* headerKeys[] = {"Location"};
+            http.collectHeaders(headerKeys, 1);
+            
+            httpCode = http.GET();
+            Serial0.printf("[OTA] HTTP状态码: %d (重定向次数: %d)\n", httpCode, redirectCount);
+            
+            if (httpCode == HTTP_CODE_MOVED_PERMANENTLY || httpCode == HTTP_CODE_FOUND) {
+                String redirectUrl = http.header("Location");
+                Serial0.printf("[OTA] 重定向到: %s\n", redirectUrl.c_str());
+                http.end();
+                delete secureClient;
+                secureClient = nullptr;
+                
+                if (redirectUrl.isEmpty()) {
+                    Serial0.println("[OTA] 重定向地址为空");
+                    break;
+                }
+                currentUrl = redirectUrl;
+                continue;
+            }
+            
+            break;
+        }
+        
+        if (httpCode != HTTP_CODE_OK) {
+            Serial0.printf("[OTA] HTTP下载失败，状态码: %d\n", httpCode);
+            if (secureClient != nullptr) {
+                http.end();
+                delete secureClient;
+                secureClient = nullptr;
+            }
+            if (retry < maxRetries - 1) {
+                Serial0.printf("[OTA] %d秒后重试...\n", (retry + 1) * 5);
+                for (int i = 0; i < (retry + 1) * 5; i++) {
+                    delay(1000);
+                    yield();
+                }
+                continue;
+            }
+            setStatus(OTA_FAILED, "固件下载失败");
+            _updateInProgress = false;
+            return false;
+        }
+        
+        int contentLength = http.getSize();
+        Serial0.printf("[OTA] 固件大小: %d 字节\n", contentLength);
+        
+        WiFiClient* stream = http.getStreamPtr();
+        
+        if (!Update.begin(contentLength, U_FLASH)) {
+            Serial0.printf("[OTA] Update.begin失败: %s\n", Update.errorString());
+            http.end();
+            delete secureClient;
+            secureClient = nullptr;
+            if (retry < maxRetries - 1) {
+                for (int i = 0; i < 3; i++) {
+                    delay(1000);
+                    yield();
+                }
+                continue;
+            }
+            setStatus(OTA_FAILED, "升级初始化失败");
+            _updateInProgress = false;
+            return false;
+        }
+        
+        Update.setMD5(http.header("X-MD5").c_str());
+        
+        Serial0.println("[OTA] 开始写入固件...");
+        size_t written = Update.writeStream(*stream);
+        
+        http.end();
+        delete secureClient;
+        secureClient = nullptr;
+        
+        if (written != contentLength) {
+            Serial0.printf("[OTA] 写入字节数: %d, 预期: %d\n", written, contentLength);
+            Serial0.printf("[OTA] Update.writeStream失败: %s\n", Update.errorString());
+            Update.end();
+            if (retry < maxRetries - 1) {
+                for (int i = 0; i < 3; i++) {
+                    delay(1000);
+                    yield();
+                }
+                continue;
+            }
+            setStatus(OTA_FAILED, "固件写入失败");
+            _updateInProgress = false;
+            return false;
+        }
+        
+        if (!Update.end(true)) {
+            Serial0.printf("[OTA] Update.end失败: %s\n", Update.errorString());
+            if (retry < maxRetries - 1) {
+                for (int i = 0; i < 3; i++) {
+                    delay(1000);
+                    yield();
+                }
+                continue;
+            }
+            setStatus(OTA_FAILED, "升级结束失败");
+            _updateInProgress = false;
+            return false;
+        }
+        
+        Serial0.println("[OTA] 升级成功！");
+        delay(500);
+        ESP.restart();
+    }
     
-    handleUpdateResult(result);
-    
-    return result == HTTP_UPDATE_OK;
+    setStatus(OTA_FAILED, "固件下载失败");
+    _updateInProgress = false;
+    return false;
 }
 
 void OtaManager::abortUpdate() {

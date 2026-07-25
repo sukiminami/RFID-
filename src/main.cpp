@@ -1,5 +1,6 @@
 #define RS485_DEBUG 1
 #include <Arduino.h>
+#include <ArduinoJson.h>
 #include "rs485.h"
 #include "CommandHandler.h"
 #include "NetworkManager.h"
@@ -207,15 +208,11 @@ void onNetworkDataReceived(const uint8_t* data, uint16_t length, void* userData)
                 }
                 return;
             } else if (strcmp(cmd, "ota_check") == 0) {
-                const char* repoStart = strstr(jsonStr, "\"repo\":\"");
-                if (repoStart) {
-                    repoStart += 7;
-                    const char* repoEnd = strstr(repoStart, "\"");
-                    if (repoEnd) {
-                        char repo[128];
-                        strncpy(repo, repoStart, repoEnd - repoStart);
-                        repo[repoEnd - repoStart] = '\0';
-                        
+                StaticJsonDocument<512> doc;
+                DeserializationError error = deserializeJson(doc, jsonStr);
+                if (!error) {
+                    const char* repo = doc["repo"];
+                    if (repo != nullptr && strlen(repo) > 0) {
                         Serial0.printf("[CMD] 检查GitHub更新: %s\n", repo);
                         
                         char latestVersion[32];
@@ -232,55 +229,54 @@ void onNetworkDataReceived(const uint8_t* data, uint16_t length, void* userData)
                         if (networkReady) {
                             networkManager.send((uint8_t*)response, strlen(response));
                         }
+                    } else {
+                        Serial0.println("[CMD] 缺少repo参数");
                     }
+                } else {
+                    Serial0.printf("[CMD] JSON解析失败: %s\n", error.c_str());
                 }
                 return;
             } else if (strcmp(cmd, "ota_github") == 0) {
-                const char* repoStart = strstr(jsonStr, "\"repo\":\"");
-                if (repoStart) {
-                    repoStart += 7;
-                    const char* repoEnd = strstr(repoStart, "\"");
-                    if (repoEnd) {
-                        char repo[128];
-                        strncpy(repo, repoStart, repoEnd - repoStart);
-                        repo[repoEnd - repoStart] = '\0';
-                        
-                        const char* assetName = nullptr;
-                        const char* assetStart = strstr(jsonStr, "\"asset\":\"");
-                        if (assetStart) {
-                            assetStart += 9;
-                            const char* assetEnd = strstr(assetStart, "\"");
-                            if (assetEnd) {
-                                char asset[128];
-                                strncpy(asset, assetStart, assetEnd - assetStart);
-                                asset[assetEnd - assetStart] = '\0';
-                                assetName = asset;
-                            }
-                        }
+                StaticJsonDocument<512> doc;
+                DeserializationError error = deserializeJson(doc, jsonStr);
+                if (!error) {
+                    const char* repo = doc["repo"];
+                    if (repo != nullptr && strlen(repo) > 0) {
+                        const char* assetName = doc["asset"];
                         
                         Serial0.printf("[CMD] 从GitHub升级: %s, asset: %s\n", repo, assetName ? assetName : "auto");
                         
                         if (networkReady) {
                             char response[256];
                             snprintf(response, sizeof(response), 
-                                     "{\"type\":\"ota_status\",\"status\":\"downloading\",\"progress\":0,\"current_version\":\"%s\"}", 
+                                     "{\"type\":\"ota_status\",\"status\":\"checking\",\"progress\":0,\"current_version\":\"%s\"}", 
                                      otaManager.getCurrentVersion());
                             networkManager.send((uint8_t*)response, strlen(response));
                         }
                         
-                        otaManager.updateFromGithub(repo, assetName);
+                        bool result = otaManager.updateFromGithub(repo, assetName);
+                        Serial0.printf("[OTA] 升级结果: %s, 状态: %d, 消息: %s\n", 
+                                      result ? "成功" : "失败", 
+                                      otaManager.getStatus(), 
+                                      otaManager.getStatusMessage());
                         
                         if (networkReady) {
                             char response[256];
                             snprintf(response, sizeof(response), 
                                      "{\"type\":\"ota_status\",\"status\":\"%s\",\"progress\":%d,\"message\":\"%s\"}", 
                                      otaManager.getStatus() == OTA_COMPLETED ? "completed" : 
-                                     otaManager.getStatus() == OTA_FAILED ? "failed" : "error",
+                                     otaManager.getStatus() == OTA_FAILED ? "failed" :
+                                     otaManager.getStatus() == OTA_DOWNLOADING ? "downloading" :
+                                     otaManager.getStatus() == OTA_CHECKING ? "checking" : "error",
                                      otaManager.getProgress(),
                                      otaManager.getStatusMessage());
                             networkManager.send((uint8_t*)response, strlen(response));
                         }
+                    } else {
+                        Serial0.println("[CMD] 缺少repo参数");
                     }
+                } else {
+                    Serial0.printf("[CMD] JSON解析失败: %s\n", error.c_str());
                 }
                 return;
             }
@@ -426,7 +422,7 @@ void setup() {
     delay(2000);
     
     Serial0.println("========================================");
-    Serial0.println("  RFID网关系统");
+    Serial0.println("  RFID网关系统22222");
     Serial0.println("========================================");
     
     Serial0.println("[系统] 初始化RS485模块...");
