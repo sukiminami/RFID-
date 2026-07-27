@@ -213,6 +213,7 @@ bool OtaManager::checkUpdate(const char* repo, char* latestVersion, int maxLen) 
     const char* tagName = doc["tag_name"];
     if (tagName != nullptr) {
         strncpy(latestVersion, tagName, maxLen - 1);
+        latestVersion[maxLen - 1] = '\0';
         Serial0.printf("[OTA] 最新版本: %s, 当前版本: %s\n", latestVersion, getCurrentVersion());
         setStatus(OTA_IDLE, "检查完成");
         // 返回是否有新版本(版本号不同)
@@ -239,8 +240,8 @@ bool OtaManager::updateFromGithub(const char* repo, const char* assetName) {
         return false;
     }
     
-    char downloadUrl[512];
-    char version[32];
+    char downloadUrl[512] = {0};
+    char version[32] = {0};
     
     // 获取最新发布资产的下载URL
     if (!getLatestReleaseAsset(repo, assetName, downloadUrl, sizeof(downloadUrl), version, sizeof(version))) {
@@ -330,6 +331,10 @@ bool OtaManager::getLatestReleaseAsset(const char* repo, const char* assetName, 
     const char* tagName = doc["tag_name"];
     if (tagName != nullptr) {
         strncpy(version, tagName, versionMaxLen - 1);
+        version[versionMaxLen - 1] = '\0';
+    } else {
+        version[0] = '\0';
+        Serial0.println("[OTA] 警告: 未找到版本号");
     }
     
     // 获取assets数组
