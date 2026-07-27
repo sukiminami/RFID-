@@ -160,13 +160,27 @@ bool OtaManager::checkUpdate(const char* repo, char* latestVersion, int maxLen) 
     
     Serial0.printf("[OTA] 检查更新: %s\n", apiUrl);
     
+    // 创建安全客户端(用于HTTPS)
+    WiFiClientSecure* secureClient = new WiFiClientSecure();
+    if (secureClient == nullptr) {
+        setStatus(OTA_FAILED, "创建安全客户端失败");
+        return false;
+    }
+    secureClient->setInsecure();
+    
     // 创建HTTPClient实例
     HTTPClient http;
-    if (!http.begin(apiUrl)) {
+    if (!http.begin(*secureClient, apiUrl)) {
         setStatus(OTA_FAILED, "HTTP连接失败");
+        delete secureClient;
         http.end();
         return false;
     }
+    
+    // 设置连接超时(15秒)
+    http.setConnectTimeout(15000);
+    // 设置总超时(30秒)
+    http.setTimeout(30000);
     
     // 添加GitHub API接受头
     http.addHeader("Accept", "application/vnd.github.v3+json");
@@ -174,19 +188,23 @@ bool OtaManager::checkUpdate(const char* repo, char* latestVersion, int maxLen) 
     // 发送GET请求
     int httpCode = http.GET();
     if (httpCode != HTTP_CODE_OK) {
+        Serial0.printf("[OTA] GitHub API HTTP状态码: %d\n", httpCode);
         setStatus(OTA_FAILED, "获取版本信息失败");
         http.end();
+        delete secureClient;
         return false;
     }
     
     // 获取响应内容
     String payload = http.getString();
     http.end();
+    delete secureClient;
     
     // 解析JSON响应
-    DynamicJsonDocument doc(1024);
+    DynamicJsonDocument doc(2048);
     DeserializationError error = deserializeJson(doc, payload);
     if (error) {
+        Serial0.printf("[OTA] JSON解析错误: %s\n", error.c_str());
         setStatus(OTA_FAILED, "解析版本信息失败");
         return false;
     }
@@ -254,13 +272,27 @@ bool OtaManager::getLatestReleaseAsset(const char* repo, const char* assetName, 
     char apiUrl[256];
     snprintf(apiUrl, sizeof(apiUrl), "https://api.github.com/repos/%s/releases/latest", repo);
     
+    // 创建安全客户端(用于HTTPS)
+    WiFiClientSecure* secureClient = new WiFiClientSecure();
+    if (secureClient == nullptr) {
+        setStatus(OTA_FAILED, "创建安全客户端失败");
+        return false;
+    }
+    secureClient->setInsecure();
+    
     // 创建HTTPClient实例
     HTTPClient http;
-    if (!http.begin(apiUrl)) {
+    if (!http.begin(*secureClient, apiUrl)) {
         setStatus(OTA_FAILED, "HTTP连接失败");
+        delete secureClient;
         http.end();
         return false;
     }
+    
+    // 设置连接超时(15秒)
+    http.setConnectTimeout(15000);
+    // 设置总超时(30秒)
+    http.setTimeout(30000);
     
     // 添加GitHub API接受头
     http.addHeader("Accept", "application/vnd.github.v3+json");
@@ -271,6 +303,7 @@ bool OtaManager::getLatestReleaseAsset(const char* repo, const char* assetName, 
     if (httpCode != HTTP_CODE_OK) {
         String errorMsg = http.getString();
         http.end();
+        delete secureClient;
         Serial0.printf("[OTA] HTTP错误响应: %s\n", errorMsg.c_str());
         setStatus(OTA_FAILED, "获取版本信息失败");
         return false;
@@ -279,6 +312,7 @@ bool OtaManager::getLatestReleaseAsset(const char* repo, const char* assetName, 
     // 获取响应内容
     String payload = http.getString();
     http.end();
+    delete secureClient;
     
     Serial0.printf("[OTA] 响应长度: %d\n", payload.length());
     Serial0.printf("[OTA] 响应内容(前200字符): %s\n", payload.substring(0, min((int)payload.length(), 200)).c_str());
@@ -413,13 +447,26 @@ bool OtaManager::downloadAndUpdate(const char* url) {
         for (int redirectCount = 0; redirectCount < 5; redirectCount++) {
             // 创建安全客户端(用于HTTPS)
             secureClient = new WiFiClientSecure();
+            if (secureClient == nullptr) {
+                Serial0.println("[OTA] WiFiClientSecure创建失败");
+                httpCode = -2;
+                break;
+            }
+            
             // 禁用证书验证(适用于自签名证书或无法验证的服务器)
             secureClient->setInsecure();
             
             Serial0.printf("[OTA] HTTP连接前内存: %d 字节\n", ESP.getFreeHeap());
             
             // 使用安全客户端连接
-            http.begin(*secureClient, currentUrl);
+            if (!http.begin(*secureClient, currentUrl)) {
+                Serial0.println("[OTA] HTTP连接初始化失败");
+                httpCode = -3;
+                delete secureClient;
+                secureClient = nullptr;
+                break;
+            }
+            
             // 设置连接超时(30秒，适配慢网络)
             http.setConnectTimeout(30000);
             // 设置总超时(120秒，适配慢网络)
@@ -459,18 +506,22 @@ bool OtaManager::downloadAndUpdate(const char* url) {
         if (httpCode != HTTP_CODE_OK) {
             Serial0.printf("[OTA] HTTP下载失败，状态码: %d\n", httpCode);
             // 清理资源
+            http.end();
             if (secureClient != nullptr) {
-                http.end();
                 delete secureClient;
                 secureClient = nullptr;
             }
             // 判断是否需要重试
             if (retry < maxRetries - 1) {
                 Serial0.printf("[OTA] %d秒后重试...\n", (retry + 1) * 5);
-                // 等待重试(期间调用yield()让出CPU)
+                // 等待重试(期间保持MQTT连接活跃)
                 for (int i = 0; i < (retry + 1) * 5; i++) {
                     delay(1000);
                     yield();
+                    // 保持MQTT连接(安全检查)
+                    if (_networkManager != nullptr) {
+                        _networkManager->update();
+                    }
                 }
                 continue;
             }
@@ -484,8 +535,50 @@ bool OtaManager::downloadAndUpdate(const char* url) {
         int contentLength = http.getSize();
         Serial0.printf("[OTA] 固件大小: %d 字节\n", contentLength);
         
+        // 检查固件大小有效性
+        if (contentLength <= 0) {
+            Serial0.println("[OTA] 无效的固件大小");
+            http.end();
+            delete secureClient;
+            secureClient = nullptr;
+            if (retry < maxRetries - 1) {
+                Serial0.println("[OTA] 3秒后重试...");
+                for (int i = 0; i < 3; i++) {
+                    delay(1000);
+                    yield();
+                    if (_networkManager != nullptr) {
+                        _networkManager->update();
+                    }
+                }
+                continue;
+            }
+            setStatus(OTA_FAILED, "无效的固件大小");
+            _updateInProgress = false;
+            return false;
+        }
+        
         // 获取HTTP流指针
         WiFiClient* stream = http.getStreamPtr();
+        if (stream == nullptr) {
+            Serial0.println("[OTA] 获取HTTP流失败");
+            http.end();
+            delete secureClient;
+            secureClient = nullptr;
+            if (retry < maxRetries - 1) {
+                Serial0.println("[OTA] 3秒后重试...");
+                for (int i = 0; i < 3; i++) {
+                    delay(1000);
+                    yield();
+                    if (_networkManager != nullptr) {
+                        _networkManager->update();
+                    }
+                }
+                continue;
+            }
+            setStatus(OTA_FAILED, "获取HTTP流失败");
+            _updateInProgress = false;
+            return false;
+        }
         
         // 初始化OTA更新(写入Flash)
         if (!Update.begin(contentLength, U_FLASH)) {
@@ -496,9 +589,13 @@ bool OtaManager::downloadAndUpdate(const char* url) {
             secureClient = nullptr;
             // 判断是否需要重试
             if (retry < maxRetries - 1) {
+                Serial0.println("[OTA] 3秒后重试...");
                 for (int i = 0; i < 3; i++) {
                     delay(1000);
                     yield();
+                    if (_networkManager != nullptr) {
+                        _networkManager->update();
+                    }
                 }
                 continue;
             }
@@ -607,15 +704,17 @@ bool OtaManager::downloadAndUpdate(const char* url) {
         if (totalWritten != contentLength) {
             Serial0.printf("[OTA] 写入字节数: %d, 预期: %d\n", (int)totalWritten, contentLength);
             Serial0.printf("[OTA] 下载失败: %s\n", Update.errorString());
-            // 中止升级
-            Update.abort();
+            // 中止升级(安全检查)
+            if (Update.isRunning()) {
+                Update.abort();
+            }
             // 判断是否需要重试
             if (retry < maxRetries - 1) {
                 Serial0.printf("[OTA] %d秒后重试...\n", (retry + 1) * 5);
                 for (int i = 0; i < (retry + 1) * 5; i++) {
                     delay(1000);
                     yield();
-                    // 保持MQTT连接
+                    // 保持MQTT连接(安全检查)
                     if (_networkManager != nullptr) {
                         _networkManager->update();
                     }
@@ -633,14 +732,17 @@ bool OtaManager::downloadAndUpdate(const char* url) {
         // 结束升级并验证(参数true表示验证固件)
         if (!Update.end(true)) {
             Serial0.printf("[OTA] Update.end失败: %s\n", Update.errorString());
-            // 中止升级
-            Update.abort();
+            // 中止升级(安全检查)
+            if (Update.isRunning()) {
+                Update.abort();
+            }
             // 判断是否需要重试
             if (retry < maxRetries - 1) {
+                Serial0.println("[OTA] 3秒后重试...");
                 for (int i = 0; i < 3; i++) {
                     delay(1000);
                     yield();
-                    // 保持MQTT连接
+                    // 保持MQTT连接(安全检查)
                     if (_networkManager != nullptr) {
                         _networkManager->update();
                     }
