@@ -219,10 +219,16 @@ private:
     NetworkManager* _networkManager;
     
     /**
-     * @var _userData
-     * @brief 用户数据指针，传递给回调函数
+     * @var _progressUserData
+     * @brief 进度回调用户数据指针
      */
-    void* _userData;
+    void* _progressUserData;
+    
+    /**
+     * @var _statusUserData
+     * @brief 状态回调用户数据指针
+     */
+    void* _statusUserData;
     
     /**
      * @brief 设置OTA状态和消息

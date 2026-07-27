@@ -30,7 +30,8 @@ static OtaManager* s_instance = nullptr;
  */
 OtaManager::OtaManager() 
     : _status(OTA_IDLE), _progress(0), _updateInProgress(false),
-      _progressCallback(nullptr), _statusCallback(nullptr), _networkManager(nullptr), _userData(nullptr) {
+      _progressCallback(nullptr), _statusCallback(nullptr), _networkManager(nullptr),
+      _progressUserData(nullptr), _statusUserData(nullptr) {
     memset(_statusMessage, 0, sizeof(_statusMessage));
     memset(_currentVersion, 0, sizeof(_currentVersion));
 }
@@ -58,7 +59,7 @@ bool OtaManager::begin() {
             s_instance->_progress = percent;
             // 触发进度回调(如果已设置)
             if (s_instance->_progressCallback != nullptr) {
-                s_instance->_progressCallback(percent, s_instance->_userData);
+                s_instance->_progressCallback(percent, s_instance->_progressUserData);
             }
         }
     });
@@ -75,7 +76,7 @@ bool OtaManager::begin() {
  */
 void OtaManager::setProgressCallback(OtaProgressCallback callback, void* userData) {
     _progressCallback = callback;
-    _userData = userData;
+    _progressUserData = userData;
 }
 
 /**
@@ -86,7 +87,7 @@ void OtaManager::setProgressCallback(OtaProgressCallback callback, void* userDat
  */
 void OtaManager::setStatusCallback(OtaStatusCallback callback, void* userData) {
     _statusCallback = callback;
-    _userData = userData;
+    _statusUserData = userData;
 }
 
 /**
@@ -370,10 +371,68 @@ bool OtaManager::getLatestReleaseAsset(const char* repo, const char* assetName, 
     // 手动字符串解析提取assets中的browser_download_url
     const char* assetsStart = strstr(payload, "\"assets\":[");
     if (assetsStart == nullptr) {
+        Serial0.println("[OTA] 警告: 主响应中未找到assets数组，尝试从assets_url获取");
+        
+        // 尝试从assets_url获取资产列表
+        const char* assetsUrlStart = strstr(payload, "\"assets_url\":\"");
+        if (assetsUrlStart != nullptr) {
+            assetsUrlStart += 14;
+            const char* assetsUrlEnd = strchr(assetsUrlStart, '\"');
+            if (assetsUrlEnd != nullptr) {
+                int assetsUrlLen = assetsUrlEnd - assetsUrlStart;
+                if (assetsUrlLen > 0 && assetsUrlLen < 512) {
+                    char assetsUrl[512];
+                    strncpy(assetsUrl, assetsUrlStart, assetsUrlLen);
+                    assetsUrl[assetsUrlLen] = '\0';
+                    
+                    // 释放当前payload
+                    free(payload);
+                    
+                    // 重新获取资产列表
+                    WiFiClientSecure* assetClient = new WiFiClientSecure();
+                    if (assetClient != nullptr) {
+                        assetClient->setInsecure();
+                        HTTPClient assetHttp;
+                        if (assetHttp.begin(*assetClient, assetsUrl)) {
+                            assetHttp.setConnectTimeout(15000);
+                            assetHttp.setTimeout(30000);
+                            assetHttp.addHeader("Accept", "application/vnd.github.v3+json");
+                            
+                            int assetHttpCode = assetHttp.GET();
+                            Serial0.printf("[OTA] 资产列表HTTP状态码: %d\n", assetHttpCode);
+                            if (assetHttpCode == HTTP_CODE_OK) {
+                                int assetPayloadLen = assetHttp.getSize();
+                                if (assetPayloadLen <= 0 || assetPayloadLen > 8192) {
+                                    assetPayloadLen = 8192;
+                                }
+                                payload = (char*)malloc(assetPayloadLen);
+                                if (payload != nullptr) {
+                                    int assetReadLen = assetHttp.getStream().readBytes((uint8_t*)payload, assetPayloadLen - 1);
+                                    payload[assetReadLen] = '\0';
+                                    Serial0.printf("[OTA] 资产列表响应长度: %d\n", assetReadLen);
+                                    
+                                    // 再次查找assets数组(这次应该是数组格式)
+                                    assetsStart = strstr(payload, "[");
+                                    if (assetsStart != nullptr) {
+                                        goto parseAssets;
+                                    }
+                                }
+                            }
+                            assetHttp.end();
+                        }
+                        delete assetClient;
+                    }
+                }
+            }
+        }
+        
+        free(payload);
         setStatus(OTA_FAILED, "未找到发布资产");
         return false;
     }
     assetsStart += 10;
+
+parseAssets:
     
     // 优先级变量：.bin > .zip > 其他(使用堆缓冲区，避免栈溢出)
     char* binUrl = (char*)malloc(512);
@@ -786,7 +845,7 @@ bool OtaManager::downloadAndUpdate(const char* url) {
                             
                             // 每5%触发一次进度回调(减少MQTT消息频率)
                             if (_progressCallback != nullptr && progress % 5 == 0) {
-                                _progressCallback(progress, _userData);
+                                _progressCallback(progress, _progressUserData);
                             }
                         }
                     }
@@ -946,13 +1005,20 @@ void OtaManager::setStatus(OtaStatus status, const char* message) {
     _status = status;
     if (message != nullptr) {
         strncpy(_statusMessage, message, sizeof(_statusMessage) - 1);
+        _statusMessage[sizeof(_statusMessage) - 1] = '\0';
+    } else {
+        _statusMessage[0] = '\0';
     }
     
     Serial0.printf("[OTA] 状态: %d, 消息: %s\n", status, _statusMessage);
     
-    // 触发状态回调
+    // 触发状态回调(安全检查)
     if (_statusCallback != nullptr) {
-        _statusCallback(status, _statusMessage, _userData);
+        try {
+            _statusCallback(status, _statusMessage, _statusUserData);
+        } catch (...) {
+            Serial0.println("[OTA] 状态回调执行异常");
+        }
     }
 }
 
