@@ -420,10 +420,10 @@ bool OtaManager::downloadAndUpdate(const char* url) {
             
             // 使用安全客户端连接
             http.begin(*secureClient, currentUrl);
-            // 设置连接超时(15秒)
-            http.setConnectTimeout(15000);
-            // 设置总超时(30秒)
-            http.setTimeout(30000);
+            // 设置连接超时(30秒，适配慢网络)
+            http.setConnectTimeout(30000);
+            // 设置总超时(120秒，适配慢网络)
+            http.setTimeout(120000);
             
             // 收集Location响应头(用于重定向)
             const char* headerKeys[] = {"Location"};
@@ -582,8 +582,8 @@ bool OtaManager::downloadAndUpdate(const char* url) {
                 Serial0.printf("[OTA] 进度: %d%%, 已下载: %d/%d\n", lastProgress, (int)totalWritten, contentLength);
             }
             
-            // 下载超时检测(30秒无数据)
-            if (now - lastDataTime > 30000) {
+            // 下载超时检测(120秒无数据，适配慢网络环境)
+            if (now - lastDataTime > 120000) {
                 Serial0.println("[OTA] 下载超时，连接挂起");
                 break;
             }
