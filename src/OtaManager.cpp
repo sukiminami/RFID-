@@ -195,12 +195,19 @@ bool OtaManager::checkUpdate(const char* repo, char* latestVersion, int maxLen) 
         return false;
     }
     
-    // 获取响应内容到栈缓冲区(避免heap分配)
+    // 获取响应内容到堆缓冲区(避免栈溢出)
     int payloadLen = http.getSize();
     if (payloadLen <= 0 || payloadLen > 4096) {
         payloadLen = 4096;
     }
-    char payload[4096];
+    char* payload = (char*)malloc(payloadLen);
+    if (payload == nullptr) {
+        Serial0.println("[OTA] 分配缓冲区失败");
+        http.end();
+        delete secureClient;
+        setStatus(OTA_FAILED, "内存不足");
+        return false;
+    }
     int readLen = http.getStream().readBytes((uint8_t*)payload, payloadLen - 1);
     payload[readLen] = '\0';
     
@@ -222,6 +229,8 @@ bool OtaManager::checkUpdate(const char* repo, char* latestVersion, int maxLen) 
             }
         }
     }
+    
+    free(payload);
     
     if (latestVersion[0] != '\0') {
         Serial0.printf("[OTA] 最新版本: %s, 当前版本: %s\n", latestVersion, getCurrentVersion());
@@ -319,12 +328,19 @@ bool OtaManager::getLatestReleaseAsset(const char* repo, const char* assetName, 
         return false;
     }
     
-    // 获取响应内容到栈缓冲区(避免heap分配，防止WiFiClientSecure释放后堆损坏)
+    // 获取响应内容到堆缓冲区(避免栈溢出，栈上分配大数组会导致stack overflow)
     int payloadLen = http.getSize();
     if (payloadLen <= 0 || payloadLen > 8192) {
         payloadLen = 8192;
     }
-    char payload[8192];
+    char* payload = (char*)malloc(payloadLen);
+    if (payload == nullptr) {
+        Serial0.println("[OTA] 分配缓冲区失败");
+        http.end();
+        delete secureClient;
+        setStatus(OTA_FAILED, "内存不足");
+        return false;
+    }
     int readLen = http.getStream().readBytes((uint8_t*)payload, payloadLen - 1);
     payload[readLen] = '\0';
     
@@ -359,10 +375,24 @@ bool OtaManager::getLatestReleaseAsset(const char* repo, const char* assetName, 
     }
     assetsStart += 10;
     
-    // 优先级变量：.bin > .zip > 其他(使用栈缓冲区)
-    char binUrl[512] = {0};
-    char zipUrl[512] = {0};
-    char fallbackUrl[512] = {0};
+    // 优先级变量：.bin > .zip > 其他(使用堆缓冲区，避免栈溢出)
+    char* binUrl = (char*)malloc(512);
+    char* zipUrl = (char*)malloc(512);
+    char* fallbackUrl = (char*)malloc(512);
+    char* tempName = (char*)malloc(128);
+    char* tempUrl = (char*)malloc(512);
+    if (binUrl == nullptr || zipUrl == nullptr || fallbackUrl == nullptr ||
+        tempName == nullptr || tempUrl == nullptr) {
+        Serial0.println("[OTA] 分配临时缓冲区失败");
+        free(binUrl); free(zipUrl); free(fallbackUrl);
+        free(tempName); free(tempUrl);
+        free(payload);
+        setStatus(OTA_FAILED, "内存不足");
+        return false;
+    }
+    memset(binUrl, 0, 512);
+    memset(zipUrl, 0, 512);
+    memset(fallbackUrl, 0, 512);
     
     // 在assets数组中查找资产信息
     const char* pos = assetsStart;
@@ -382,11 +412,9 @@ bool OtaManager::getLatestReleaseAsset(const char* repo, const char* assetName, 
             int urlLen = urlEnd - urlStart;
             
             if (nameLen > 0 && urlLen > 0 && urlLen < 512) {
-                char tempName[128];
                 strncpy(tempName, nameStart, nameLen);
                 tempName[nameLen] = '\0';
                 
-                char tempUrl[512];
                 strncpy(tempUrl, urlStart, urlLen);
                 tempUrl[urlLen] = '\0';
                 
@@ -395,16 +423,19 @@ bool OtaManager::getLatestReleaseAsset(const char* repo, const char* assetName, 
                         strncpy(downloadUrl, tempUrl, maxLen - 1);
                         downloadUrl[maxLen - 1] = '\0';
                         Serial0.printf("[OTA] 找到资产: %s\n", tempName);
+                        free(binUrl); free(zipUrl); free(fallbackUrl);
+                        free(tempName); free(tempUrl);
+                        free(payload);
                         return true;
                     }
                 } else {
                     int nameLenTemp = strlen(tempName);
                     if (nameLenTemp >= 4 && strcmp(tempName + nameLenTemp - 4, ".bin") == 0) {
-                        strncpy(binUrl, tempUrl, sizeof(binUrl) - 1);
+                        strncpy(binUrl, tempUrl, 511);
                     } else if (nameLenTemp >= 4 && strcmp(tempName + nameLenTemp - 4, ".zip") == 0) {
-                        strncpy(zipUrl, tempUrl, sizeof(zipUrl) - 1);
+                        strncpy(zipUrl, tempUrl, 511);
                     } else if (fallbackUrl[0] == '\0') {
-                        strncpy(fallbackUrl, tempUrl, sizeof(fallbackUrl) - 1);
+                        strncpy(fallbackUrl, tempUrl, 511);
                     }
                 }
             }
@@ -416,6 +447,9 @@ bool OtaManager::getLatestReleaseAsset(const char* repo, const char* assetName, 
     }
     
     if (assetName != nullptr) {
+        free(binUrl); free(zipUrl); free(fallbackUrl);
+        free(tempName); free(tempUrl);
+        free(payload);
         setStatus(OTA_FAILED, "未找到匹配的资产文件");
         return false;
     }
@@ -424,19 +458,31 @@ bool OtaManager::getLatestReleaseAsset(const char* repo, const char* assetName, 
         strncpy(downloadUrl, binUrl, maxLen - 1);
         downloadUrl[maxLen - 1] = '\0';
         Serial0.println("[OTA] 找到.bin固件文件");
+        free(binUrl); free(zipUrl); free(fallbackUrl);
+        free(tempName); free(tempUrl);
+        free(payload);
         return true;
     } else if (zipUrl[0] != '\0') {
         strncpy(downloadUrl, zipUrl, maxLen - 1);
         downloadUrl[maxLen - 1] = '\0';
         Serial0.println("[OTA] 找到.zip固件文件");
+        free(binUrl); free(zipUrl); free(fallbackUrl);
+        free(tempName); free(tempUrl);
+        free(payload);
         return true;
     } else if (fallbackUrl[0] != '\0') {
         strncpy(downloadUrl, fallbackUrl, maxLen - 1);
         downloadUrl[maxLen - 1] = '\0';
         Serial0.println("[OTA] 使用备用资产文件");
+        free(binUrl); free(zipUrl); free(fallbackUrl);
+        free(tempName); free(tempUrl);
+        free(payload);
         return true;
     }
     
+    free(binUrl); free(zipUrl); free(fallbackUrl);
+    free(tempName); free(tempUrl);
+    free(payload);
     setStatus(OTA_FAILED, "未找到可用的资产文件");
     return false;
 }
