@@ -559,8 +559,8 @@ bool OtaManager::downloadAndUpdate(const char* url) {
             
             // 设置连接超时(30秒，适配慢网络)
             http.setConnectTimeout(30000);
-            // 设置总超时(120秒，适配慢网络)
-            http.setTimeout(120000);
+            // 设置总超时(60秒，适配慢网络，uint16_t最大值限制)
+            http.setTimeout(60000);
             
             // 收集Location响应头(用于重定向)
             const char* headerKeys[] = {"Location"};

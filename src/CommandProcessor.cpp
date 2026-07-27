@@ -10,6 +10,7 @@
 #include "OtaManager.h"
 #include "NetworkManager.h"
 #include "CommandHandler.h"
+#include <ArduinoJson.h>
 
 /**
  * @var networkReady
