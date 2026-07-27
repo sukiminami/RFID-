@@ -200,8 +200,8 @@ bool OtaManager::checkUpdate(const char* repo, char* latestVersion, int maxLen) 
     http.end();
     delete secureClient;
     
-    // 解析JSON响应
-    DynamicJsonDocument doc(2048);
+    // 解析JSON响应(8192字节，足够容纳3222字节的GitHub API响应)
+    DynamicJsonDocument doc(8192);
     DeserializationError error = deserializeJson(doc, payload);
     if (error) {
         Serial0.printf("[OTA] JSON解析错误: %s\n", error.c_str());
@@ -317,8 +317,8 @@ bool OtaManager::getLatestReleaseAsset(const char* repo, const char* assetName, 
     Serial0.printf("[OTA] 响应长度: %d\n", payload.length());
     Serial0.printf("[OTA] 响应内容(前200字符): %s\n", payload.substring(0, min((int)payload.length(), 200)).c_str());
     
-    // 解析JSON响应(使用4096字节缓冲区)
-    DynamicJsonDocument doc(4096);
+    // 解析JSON响应(8192字节，足够容纳3222字节的GitHub API响应)
+    DynamicJsonDocument doc(8192);
     DeserializationError error = deserializeJson(doc, payload);
     if (error) {
         Serial0.printf("[OTA] JSON解析错误: %s\n", error.c_str());
@@ -354,6 +354,7 @@ bool OtaManager::getLatestReleaseAsset(const char* repo, const char* assetName, 
             if (assetName != nullptr) {
                 if (strcmp(name, assetName) == 0) {
                     strncpy(downloadUrl, url, maxLen - 1);
+                    downloadUrl[maxLen - 1] = '\0';
                     Serial0.printf("[OTA] 找到资产: %s\n", name);
                     return true;
                 }
@@ -380,14 +381,17 @@ bool OtaManager::getLatestReleaseAsset(const char* repo, const char* assetName, 
     // 按优先级选择下载URL
     if (binUrl != nullptr) {
         strncpy(downloadUrl, binUrl, maxLen - 1);
+        downloadUrl[maxLen - 1] = '\0';
         Serial0.println("[OTA] 找到.bin固件文件");
         return true;
     } else if (zipUrl != nullptr) {
         strncpy(downloadUrl, zipUrl, maxLen - 1);
+        downloadUrl[maxLen - 1] = '\0';
         Serial0.println("[OTA] 找到.zip固件文件");
         return true;
     } else if (fallbackUrl != nullptr) {
         strncpy(downloadUrl, fallbackUrl, maxLen - 1);
+        downloadUrl[maxLen - 1] = '\0';
         Serial0.println("[OTA] 使用备用资产文件");
         return true;
     }
@@ -436,7 +440,29 @@ bool OtaManager::downloadAndUpdate(const char* url) {
     const int maxRetries = 5;
     for (int retry = 0; retry < maxRetries; retry++) {
         Serial0.printf("[OTA] 下载尝试: %d/%d\n", retry + 1, maxRetries);
-        Serial0.printf("[OTA] 可用内存: %d 字节\n", ESP.getFreeHeap());
+        unsigned int freeHeap = ESP.getFreeHeap();
+        Serial0.printf("[OTA] 可用内存: %d 字节\n", freeHeap);
+        
+        // 检查内存是否充足(WiFiClientSecure需要约50KB TLS缓冲区)
+        if (freeHeap < 50000) {
+            Serial0.println("[OTA] 内存不足，等待GC回收...");
+            for (int i = 0; i < 5; i++) {
+                delay(100);
+                yield();
+            }
+            freeHeap = ESP.getFreeHeap();
+            Serial0.printf("[OTA] GC后可用内存: %d 字节\n", freeHeap);
+            if (freeHeap < 50000) {
+                Serial0.println("[OTA] 内存仍然不足，跳过本次尝试");
+                if (retry < maxRetries - 1) {
+                    delay(3000);
+                    continue;
+                }
+                setStatus(OTA_FAILED, "内存不足");
+                _updateInProgress = false;
+                return false;
+            }
+        }
         
         // 检查WiFi信号强度(信号太差时等待)
         int rssi = WiFi.RSSI();
@@ -470,10 +496,16 @@ bool OtaManager::downloadAndUpdate(const char* url) {
             // 禁用证书验证(适用于自签名证书或无法验证的服务器)
             secureClient->setInsecure();
             
-            // 禁用Nagle算法，减少小包延迟(提高下载速度)
-            secureClient->setNoDelay(true);
-            
-            Serial0.printf("[OTA] HTTP连接前内存: %d 字节\n", ESP.getFreeHeap());
+            // 检查可用内存(WiFiClientSecure需要约50KB TLS缓冲区)
+            unsigned int freeHeap = ESP.getFreeHeap();
+            Serial0.printf("[OTA] HTTP连接前内存: %d 字节\n", freeHeap);
+            if (freeHeap < 40960) {
+                Serial0.println("[OTA] 内存不足，无法创建HTTPS连接");
+                httpCode = -4;
+                delete secureClient;
+                secureClient = nullptr;
+                break;
+            }
             
             // 使用安全客户端连接
             if (!http.begin(*secureClient, currentUrl)) {
