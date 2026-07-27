@@ -432,11 +432,25 @@ bool OtaManager::downloadAndUpdate(const char* url) {
     
     Serial0.printf("[OTA] 开始升级，URL: %s\n", url);
     
-    // 最大重试次数
-    const int maxRetries = 3;
+    // 最大重试次数(增加到5次以应对不稳定网络)
+    const int maxRetries = 5;
     for (int retry = 0; retry < maxRetries; retry++) {
         Serial0.printf("[OTA] 下载尝试: %d/%d\n", retry + 1, maxRetries);
         Serial0.printf("[OTA] 可用内存: %d 字节\n", ESP.getFreeHeap());
+        
+        // 检查WiFi信号强度(信号太差时等待)
+        int rssi = WiFi.RSSI();
+        Serial0.printf("[OTA] 当前WiFi信号强度: %d dBm\n", rssi);
+        if (rssi < -85) {
+            Serial0.println("[OTA] WiFi信号太弱，等待信号改善...");
+            int waitCount = 0;
+            while (WiFi.RSSI() < -85 && waitCount < 30) {
+                delay(500);
+                yield();
+                waitCount++;
+            }
+            Serial0.printf("[OTA] 等待后信号强度: %d dBm\n", WiFi.RSSI());
+        }
         
         String currentUrl = url;
         HTTPClient http;
@@ -455,6 +469,9 @@ bool OtaManager::downloadAndUpdate(const char* url) {
             
             // 禁用证书验证(适用于自签名证书或无法验证的服务器)
             secureClient->setInsecure();
+            
+            // 禁用Nagle算法，减少小包延迟(提高下载速度)
+            secureClient->setNoDelay(true);
             
             Serial0.printf("[OTA] HTTP连接前内存: %d 字节\n", ESP.getFreeHeap());
             
@@ -511,11 +528,14 @@ bool OtaManager::downloadAndUpdate(const char* url) {
                 delete secureClient;
                 secureClient = nullptr;
             }
-            // 判断是否需要重试
+            // 判断是否需要重试(使用指数退避策略)
             if (retry < maxRetries - 1) {
-                Serial0.printf("[OTA] %d秒后重试...\n", (retry + 1) * 5);
+                // 指数退避: 3秒, 6秒, 12秒, 24秒, 48秒...(最大60秒)
+                int retryDelay = (1 << retry) * 3; // 2^retry * 3
+                if (retryDelay > 60) retryDelay = 60;
+                Serial0.printf("[OTA] 指数退避，%d秒后重试...\n", retryDelay);
                 // 等待重试(期间保持MQTT连接活跃)
-                for (int i = 0; i < (retry + 1) * 5; i++) {
+                for (int i = 0; i < retryDelay; i++) {
                     delay(1000);
                     yield();
                     // 保持MQTT连接(安全检查)
@@ -708,10 +728,13 @@ bool OtaManager::downloadAndUpdate(const char* url) {
             if (Update.isRunning()) {
                 Update.abort();
             }
-            // 判断是否需要重试
+            // 判断是否需要重试(使用指数退避策略)
             if (retry < maxRetries - 1) {
-                Serial0.printf("[OTA] %d秒后重试...\n", (retry + 1) * 5);
-                for (int i = 0; i < (retry + 1) * 5; i++) {
+                // 指数退避: 3秒, 6秒, 12秒, 24秒, 48秒...(最大60秒)
+                int retryDelay = (1 << retry) * 3;
+                if (retryDelay > 60) retryDelay = 60;
+                Serial0.printf("[OTA] 指数退避，%d秒后重试...\n", retryDelay);
+                for (int i = 0; i < retryDelay; i++) {
                     delay(1000);
                     yield();
                     // 保持MQTT连接(安全检查)
