@@ -237,6 +237,19 @@ bool CommandProcessor::processAlarmCommand(const char* cmd) {
  *          - ota_github: 从GitHub仓库下载并升级固件
  */
 bool CommandProcessor::processOtaCommand(const char* cmd, const char* jsonStr) {
+    // 检查OTA是否正在进行中(防止重复触发)
+    if (_otaManager != nullptr && _otaManager->getStatus() == OTA_DOWNLOADING) {
+        Serial0.println("[CMD] OTA升级正在进行中，忽略重复命令");
+        if (isNetworkReady()) {
+            char response[256];
+            snprintf(response, sizeof(response), 
+                     "{\"type\":\"ota_status\",\"status\":\"busy\",\"progress\":%d,\"message\":\"升级正在进行中\"}", 
+                     _otaManager->getProgress());
+            _networkManager->send((uint8_t*)response, strlen(response));
+        }
+        return true;
+    }
+    
     // 从URL升级命令
     if (strcmp(cmd, "ota_update") == 0) {
         // 提取url参数

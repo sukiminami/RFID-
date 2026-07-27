@@ -213,7 +213,6 @@ bool OtaManager::checkUpdate(const char* repo, char* latestVersion, int maxLen) 
     const char* tagName = doc["tag_name"];
     if (tagName != nullptr) {
         strncpy(latestVersion, tagName, maxLen - 1);
-        latestVersion[maxLen - 1] = '\0';
         Serial0.printf("[OTA] 最新版本: %s, 当前版本: %s\n", latestVersion, getCurrentVersion());
         setStatus(OTA_IDLE, "检查完成");
         // 返回是否有新版本(版本号不同)
@@ -240,8 +239,8 @@ bool OtaManager::updateFromGithub(const char* repo, const char* assetName) {
         return false;
     }
     
-    char downloadUrl[512] = {0};
-    char version[32] = {0};
+    char downloadUrl[512];
+    char version[32];
     
     // 获取最新发布资产的下载URL
     if (!getLatestReleaseAsset(repo, assetName, downloadUrl, sizeof(downloadUrl), version, sizeof(version))) {
@@ -331,10 +330,6 @@ bool OtaManager::getLatestReleaseAsset(const char* repo, const char* assetName, 
     const char* tagName = doc["tag_name"];
     if (tagName != nullptr) {
         strncpy(version, tagName, versionMaxLen - 1);
-        version[versionMaxLen - 1] = '\0';
-    } else {
-        version[0] = '\0';
-        Serial0.println("[OTA] 警告: 未找到版本号");
     }
     
     // 获取assets数组
@@ -571,14 +566,10 @@ bool OtaManager::downloadAndUpdate(const char* url) {
                 int retryDelay = (1 << retry) * 3; // 2^retry * 3
                 if (retryDelay > 60) retryDelay = 60;
                 Serial0.printf("[OTA] 指数退避，%d秒后重试...\n", retryDelay);
-                // 等待重试(期间保持MQTT连接活跃)
+                // 等待重试(不处理MQTT消息，防止重复触发OTA命令)
                 for (int i = 0; i < retryDelay; i++) {
                     delay(1000);
                     yield();
-                    // 保持MQTT连接(安全检查)
-                    if (_networkManager != nullptr) {
-                        _networkManager->update();
-                    }
                 }
                 continue;
             }
@@ -626,9 +617,6 @@ bool OtaManager::downloadAndUpdate(const char* url) {
                 for (int i = 0; i < 3; i++) {
                     delay(1000);
                     yield();
-                    if (_networkManager != nullptr) {
-                        _networkManager->update();
-                    }
                 }
                 continue;
             }
@@ -650,9 +638,6 @@ bool OtaManager::downloadAndUpdate(const char* url) {
                 for (int i = 0; i < 3; i++) {
                     delay(1000);
                     yield();
-                    if (_networkManager != nullptr) {
-                        _networkManager->update();
-                    }
                 }
                 continue;
             }
@@ -771,13 +756,10 @@ bool OtaManager::downloadAndUpdate(const char* url) {
                 int retryDelay = (1 << retry) * 3;
                 if (retryDelay > 60) retryDelay = 60;
                 Serial0.printf("[OTA] 指数退避，%d秒后重试...\n", retryDelay);
+                // 不处理MQTT消息，防止重复触发OTA命令
                 for (int i = 0; i < retryDelay; i++) {
                     delay(1000);
                     yield();
-                    // 保持MQTT连接(安全检查)
-                    if (_networkManager != nullptr) {
-                        _networkManager->update();
-                    }
                 }
                 continue;
             }
@@ -802,10 +784,6 @@ bool OtaManager::downloadAndUpdate(const char* url) {
                 for (int i = 0; i < 3; i++) {
                     delay(1000);
                     yield();
-                    // 保持MQTT连接(安全检查)
-                    if (_networkManager != nullptr) {
-                        _networkManager->update();
-                    }
                 }
                 continue;
             }
