@@ -195,27 +195,37 @@ bool OtaManager::checkUpdate(const char* repo, char* latestVersion, int maxLen) 
         return false;
     }
     
-    // 获取响应内容
-    String payload = http.getString();
+    // 获取响应内容到栈缓冲区(避免heap分配)
+    int payloadLen = http.getSize();
+    if (payloadLen <= 0 || payloadLen > 4096) {
+        payloadLen = 4096;
+    }
+    char payload[4096];
+    int readLen = http.getStream().readBytes((uint8_t*)payload, payloadLen - 1);
+    payload[readLen] = '\0';
+    
     http.end();
     delete secureClient;
     
-    // 解析JSON响应(8192字节，足够容纳3222字节的GitHub API响应)
-    DynamicJsonDocument doc(8192);
-    DeserializationError error = deserializeJson(doc, payload);
-    if (error) {
-        Serial0.printf("[OTA] JSON解析错误: %s\n", error.c_str());
-        setStatus(OTA_FAILED, "解析版本信息失败");
-        return false;
+    // 手动字符串解析提取tag_name(版本号)
+    const char* tagNameStart = strstr(payload, "\"tag_name\":\"");
+    if (tagNameStart != nullptr) {
+        tagNameStart += 12;
+        const char* tagNameEnd = strchr(tagNameStart, '\"');
+        if (tagNameEnd != nullptr) {
+            int tagLen = tagNameEnd - tagNameStart;
+            if (tagLen > 0 && tagLen < maxLen) {
+                strncpy(latestVersion, tagNameStart, tagLen);
+                latestVersion[tagLen] = '\0';
+            } else {
+                latestVersion[0] = '\0';
+            }
+        }
     }
     
-    // 提取tag_name(版本号)
-    const char* tagName = doc["tag_name"];
-    if (tagName != nullptr) {
-        strncpy(latestVersion, tagName, maxLen - 1);
+    if (latestVersion[0] != '\0') {
         Serial0.printf("[OTA] 最新版本: %s, 当前版本: %s\n", latestVersion, getCurrentVersion());
         setStatus(OTA_IDLE, "检查完成");
-        // 返回是否有新版本(版本号不同)
         return strcmp(latestVersion, getCurrentVersion()) != 0;
     }
     
@@ -309,87 +319,118 @@ bool OtaManager::getLatestReleaseAsset(const char* repo, const char* assetName, 
         return false;
     }
     
-    // 获取响应内容
-    String payload = http.getString();
+    // 获取响应内容到栈缓冲区(避免heap分配，防止WiFiClientSecure释放后堆损坏)
+    int payloadLen = http.getSize();
+    if (payloadLen <= 0 || payloadLen > 8192) {
+        payloadLen = 8192;
+    }
+    char payload[8192];
+    int readLen = http.getStream().readBytes((uint8_t*)payload, payloadLen - 1);
+    payload[readLen] = '\0';
+    
     http.end();
     delete secureClient;
     
-    Serial0.printf("[OTA] 响应长度: %d\n", payload.length());
-    Serial0.printf("[OTA] 响应内容(前200字符): %s\n", payload.substring(0, min((int)payload.length(), 200)).c_str());
+    Serial0.printf("[OTA] 响应长度: %d\n", readLen);
+    Serial0.printf("[OTA] 响应内容(前200字符): %s\n", String(payload).substring(0, min(readLen, 200)).c_str());
     
-    // 解析JSON响应(8192字节，足够容纳3222字节的GitHub API响应)
-    DynamicJsonDocument doc(8192);
-    DeserializationError error = deserializeJson(doc, payload);
-    if (error) {
-        Serial0.printf("[OTA] JSON解析错误: %s\n", error.c_str());
-        setStatus(OTA_FAILED, "解析版本信息失败");
-        return false;
-    }
-    
-    // 提取tag_name(版本号)
-    const char* tagName = doc["tag_name"];
-    if (tagName != nullptr) {
-        strncpy(version, tagName, versionMaxLen - 1);
-    }
-    
-    // 获取assets数组
-    JsonArray assets = doc["assets"];
-    if (assets.isNull()) {
-        setStatus(OTA_FAILED, "未找到发布资产");
-        return false;
-    }
-    
-    // 优先级变量：.bin > .zip > 其他
-    const char* zipUrl = nullptr;
-    const char* binUrl = nullptr;
-    const char* fallbackUrl = nullptr;
-    
-    // 遍历资产列表
-    for (JsonObject asset : assets) {
-        const char* name = asset["name"];
-        const char* url = asset["browser_download_url"];
-        
-        if (name != nullptr && url != nullptr) {
-            // 如果指定了资产名称，精确匹配
-            if (assetName != nullptr) {
-                if (strcmp(name, assetName) == 0) {
-                    strncpy(downloadUrl, url, maxLen - 1);
-                    downloadUrl[maxLen - 1] = '\0';
-                    Serial0.printf("[OTA] 找到资产: %s\n", name);
-                    return true;
-                }
-            } else {
-                // 未指定资产名称，按优先级选择
-                String nameStr = String(name);
-                if (nameStr.endsWith(".bin")) {
-                    binUrl = url;
-                } else if (nameStr.endsWith(".zip")) {
-                    zipUrl = url;
-                } else if (fallbackUrl == nullptr) {
-                    fallbackUrl = url;
-                }
+    // 手动字符串解析提取tag_name(版本号)
+    const char* tagNameStart = strstr(payload, "\"tag_name\":\"");
+    if (tagNameStart != nullptr) {
+        tagNameStart += 12;
+        const char* tagNameEnd = strchr(tagNameStart, '\"');
+        if (tagNameEnd != nullptr) {
+            int tagLen = tagNameEnd - tagNameStart;
+            if (tagLen > 0 && tagLen < versionMaxLen) {
+                strncpy(version, tagNameStart, tagLen);
+                version[tagLen] = '\0';
             }
         }
     }
+    if (version[0] == '\0') {
+        Serial0.println("[OTA] 警告: 未找到版本号");
+    }
     
-    // 指定了资产名称但未找到
+    // 手动字符串解析提取assets中的browser_download_url
+    const char* assetsStart = strstr(payload, "\"assets\":[");
+    if (assetsStart == nullptr) {
+        setStatus(OTA_FAILED, "未找到发布资产");
+        return false;
+    }
+    assetsStart += 10;
+    
+    // 优先级变量：.bin > .zip > 其他(使用栈缓冲区)
+    char binUrl[512] = {0};
+    char zipUrl[512] = {0};
+    char fallbackUrl[512] = {0};
+    
+    // 在assets数组中查找资产信息
+    const char* pos = assetsStart;
+    while (pos != nullptr && *pos != '\0') {
+        const char* nameStart = strstr(pos, "\"name\":\"");
+        const char* urlStart = strstr(pos, "\"browser_download_url\":\"");
+        
+        if (nameStart != nullptr && urlStart != nullptr) {
+            nameStart += 8;
+            const char* nameEnd = strchr(nameStart, '\"');
+            if (nameEnd == nullptr) break;
+            int nameLen = nameEnd - nameStart;
+            
+            urlStart += 24;
+            const char* urlEnd = strchr(urlStart, '\"');
+            if (urlEnd == nullptr) break;
+            int urlLen = urlEnd - urlStart;
+            
+            if (nameLen > 0 && urlLen > 0 && urlLen < 512) {
+                char tempName[128];
+                strncpy(tempName, nameStart, nameLen);
+                tempName[nameLen] = '\0';
+                
+                char tempUrl[512];
+                strncpy(tempUrl, urlStart, urlLen);
+                tempUrl[urlLen] = '\0';
+                
+                if (assetName != nullptr) {
+                    if (strcmp(tempName, assetName) == 0) {
+                        strncpy(downloadUrl, tempUrl, maxLen - 1);
+                        downloadUrl[maxLen - 1] = '\0';
+                        Serial0.printf("[OTA] 找到资产: %s\n", tempName);
+                        return true;
+                    }
+                } else {
+                    int nameLenTemp = strlen(tempName);
+                    if (nameLenTemp >= 4 && strcmp(tempName + nameLenTemp - 4, ".bin") == 0) {
+                        strncpy(binUrl, tempUrl, sizeof(binUrl) - 1);
+                    } else if (nameLenTemp >= 4 && strcmp(tempName + nameLenTemp - 4, ".zip") == 0) {
+                        strncpy(zipUrl, tempUrl, sizeof(zipUrl) - 1);
+                    } else if (fallbackUrl[0] == '\0') {
+                        strncpy(fallbackUrl, tempUrl, sizeof(fallbackUrl) - 1);
+                    }
+                }
+            }
+            
+            pos = urlEnd + 1;
+        } else {
+            break;
+        }
+    }
+    
     if (assetName != nullptr) {
         setStatus(OTA_FAILED, "未找到匹配的资产文件");
         return false;
     }
     
-    // 按优先级选择下载URL
-    if (binUrl != nullptr) {
+    if (binUrl[0] != '\0') {
         strncpy(downloadUrl, binUrl, maxLen - 1);
         downloadUrl[maxLen - 1] = '\0';
         Serial0.println("[OTA] 找到.bin固件文件");
         return true;
-    } else if (zipUrl != nullptr) {
+    } else if (zipUrl[0] != '\0') {
         strncpy(downloadUrl, zipUrl, maxLen - 1);
         downloadUrl[maxLen - 1] = '\0';
         Serial0.println("[OTA] 找到.zip固件文件");
         return true;
-    } else if (fallbackUrl != nullptr) {
+    } else if (fallbackUrl[0] != '\0') {
         strncpy(downloadUrl, fallbackUrl, maxLen - 1);
         downloadUrl[maxLen - 1] = '\0';
         Serial0.println("[OTA] 使用备用资产文件");

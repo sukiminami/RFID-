@@ -13,7 +13,6 @@
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <HTTPUpdate.h>
-#include <ArduinoJson.h>
 
 // 前向声明
 class NetworkManager;
